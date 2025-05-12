@@ -14,14 +14,14 @@ class TaskPriority(str, Enum):
     HIGH = "high"
 
 class TaskBase(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(None, max_length=1000)
-    status: TaskStatus = Field(default=TaskStatus.TODO)
-    priority: TaskPriority = Field(default=TaskPriority.MEDIUM)
-    board_id: int = Field(..., gt=0)
-    user_id: int = Field(..., gt=0)
-    group_id: Optional[int] = Field(None, gt=0)
+    title: str
+    description: Optional[str] = None
     deadline: Optional[datetime] = None
+    assigned_files: Optional[int] = None
+    group_id: Optional[int] = None
+    board_id: Optional[int] = None
+    user_ids: List[int] = []  # Исполнители задачи
+    assigner_id: Optional[int] = 1  # ID пользователя, который назначил задачу (по умолчанию 1)
 
 class TaskCreate(TaskBase):
     pass
@@ -43,16 +43,19 @@ class Task(TaskBase):
 
     class Config:
         from_attributes = True
-
-    @field_serializer("user_id")
-    def serialize_user_id(self, obj):
-        return obj.user_id
+    
+    # @field_serializer("user_id")
+    # def serialize_user_id(self, obj):
+    #     return obj.user_id
 
 class TaskResponse(TaskBase):
     task_id: int
     created_at: datetime
     updated_at: datetime
-    user_id: int
+    group_id: Optional[int] = None
+    board_id: Optional[int] = None
+    user_ids: List[int]  # ID исполнителей
+    assigner_id: int  # ID назначившего
 
     class Config:
         from_attributes = True

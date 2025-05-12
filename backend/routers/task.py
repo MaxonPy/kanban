@@ -17,25 +17,39 @@ router = APIRouter()
 @router.post("/tasks", response_model=TaskResponse, summary="Создать новую задачу")
 def create_task(task: TaskBase, db: Session = Depends(get_db)):
     task_data = task.model_dump()
-    user_ids = task_data.pop("user_ids")
+    # Устанавливаем дефолтные значения
+    task_data["status"] = "todo"
+    task_data["group_id"] = 1
+    task_data["board_id"] = 1
+    
+    # Получаем ID исполнителей и назначившего
+    user_ids = task_data.pop("user_ids", [2])  # По умолчанию user_id = 2
+    assigner_id = task_data.pop("assigner_id", 1)  # По умолчанию user_id = 1
+    
+    # Создаем задачу
     db_task = models.Tasks(**task_data)
-
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
 
+    # Добавляем исполнителей
     for user_id in user_ids:
         user = db.get(models.Users, user_id)
         if user:
             db_task.users.append(user)
 
+    # Добавляем назначившего
+    assigner = db.get(models.Users, assigner_id)
+    if assigner:
+        db_task.assigners.append(assigner)
+
     db.commit()
     db.refresh(db_task)
 
-    # вручную добавляем user_ids в ответ
     response = TaskResponse(
         **db_task.__dict__,
-        user_ids=[user.user_id for user in db_task.users]
+        user_ids=[user.user_id for user in db_task.users],
+        assigner_id=assigner_id
     )
     return response
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -17,6 +17,12 @@ import {
   SelectValue,
 } from './ui/select';
 
+interface User {
+  user_id: number;
+  name: string;
+  role: string;
+}
+
 interface TaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -29,7 +35,30 @@ interface FileItem {
 
 export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [deadline, setDeadline] = useState('');
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedUser, setSelectedUser] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/users');
+        if (!response.ok) throw new Error('Failed to fetch users');
+        const data = await response.json();
+        setUsers(data);
+      } catch (error) {
+        console.error('Error fetching users:', error);
+      }
+    };
+
+    if (open) {
+      fetchUsers();
+    }
+  }, [open]);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const newFiles = Array.from(event.target.files || []).map(file => ({
@@ -41,6 +70,34 @@ export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
 
   const removeFile = (fileName: string) => {
     setFiles(files.filter(file => file.name !== fileName));
+  };
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      const taskData = {
+        title,
+        description,
+        deadline: deadline ? new Date(deadline).toISOString() : null,
+        user_ids: selectedUser ? [parseInt(selectedUser)] : [],
+      };
+      const response = await fetch('http://localhost:8000/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData),
+      });
+      if (!response.ok) throw new Error('Ошибка при создании задачи');
+      setTitle('');
+      setDescription('');
+      setDeadline('');
+      setFiles([]);
+      setSelectedUser('');
+      onOpenChange(false);
+    } catch (e) {
+      alert('Ошибка при создании задачи');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -55,6 +112,8 @@ export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
             <div className="mb-2 text-sm">Название задачи</div>
             <Input
               className="w-full border border-black bg-white"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
             />
           </div>
           
@@ -62,6 +121,8 @@ export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
             <div className="mb-2 text-sm">Описание задачи</div>
             <textarea
               className="w-full h-32 border border-black rounded-md bg-white p-2 resize-none focus:outline-none focus:ring-2 focus:ring-gray-400"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
             />
           </div>
           
@@ -109,20 +170,23 @@ export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
             <Input
               type="date"
               className="w-full border border-black bg-white"
+              value={deadline}
+              onChange={e => setDeadline(e.target.value)}
             />
           </div>
           
           <div>
             <div className="mb-2 text-sm">Назначить</div>
-            <Select>
+            <Select value={selectedUser} onValueChange={setSelectedUser}>
               <SelectTrigger className="w-full border-black bg-white">
-                <SelectValue placeholder="Выбрать группу или студентов" />
+                <SelectValue placeholder="Выбрать пользователя" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="group1">Группа 21ВА1</SelectItem>
-                <SelectItem value="group2">Группа 21ВА2</SelectItem>
-                <SelectItem value="student1">Иванов Иван</SelectItem>
-                <SelectItem value="student2">Петров Петр</SelectItem>
+                {users.map((user) => (
+                  <SelectItem key={user.user_id} value={user.user_id.toString()}>
+                    {user.name} ({user.role})
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -130,10 +194,12 @@ export function TaskDialog({ open, onOpenChange }: TaskDialogProps) {
 
         <DialogFooter className="px-4 py-3 mt-2">
           <Button
-            type="submit"
+            type="button"
             className="w-full bg-black text-white hover:bg-gray-800"
+            onClick={handleSave}
+            disabled={loading}
           >
-            Сохранить
+            {loading ? 'Сохраняем...' : 'Сохранить'}
           </Button>
         </DialogFooter>
       </DialogContent>

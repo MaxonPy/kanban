@@ -28,6 +28,15 @@ users_tasks_table = Table(
     Base.metadata,
     Column("user_id", ForeignKey("users.user_id"), primary_key=True),
     Column("task_id", ForeignKey("tasks.task_id"), primary_key=True),
+    Column("assigned_at", DateTime, default=datetime.now), # изменили на True
+)
+
+
+task_assigners_table = Table(
+    "task_assigners",
+    Base.metadata,
+    Column("user_id", ForeignKey("users.user_id"), primary_key=True),
+    Column("task_id", ForeignKey("tasks.task_id"), primary_key=True),
     Column("assigned_at", DateTime, default=datetime.now)
 )
 
@@ -48,27 +57,26 @@ class Users(Base):
     boards = relationship("KanbanBoards", back_populates="user")
     groups = relationship("UserGroups", back_populates="user")
     tasks = relationship("Tasks", secondary=users_tasks_table, back_populates="users")
+    assigned_tasks = relationship("Tasks", secondary=task_assigners_table, back_populates="assigners")
 
 class Tasks(Base):
     __tablename__ = "tasks"
     task_id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
     description = Column(Text)
-    deadline = Column(DateTime, nullable=False)
-    status = Column(Enum(TaskStatusEnum), nullable=False)
+    deadline = Column(DateTime, nullable=True)
+    status = Column(Enum(TaskStatusEnum), nullable=False, default=TaskStatusEnum.todo)
     assigned_files = Column(Integer)
-    priority = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now())
     updated_at = Column(DateTime, default=datetime.now(), onupdate=datetime.now())
-    
-    group_id = Column(Integer, ForeignKey("groups.group_id"))
-    board_id = Column(Integer, ForeignKey("kanban_boards.board_id"))
-        
+
+    group_id = Column(Integer, ForeignKey("groups.group_id"), default=1)
+    board_id = Column(Integer, ForeignKey("kanban_boards.board_id"), default=1)
+
     group = relationship("Groups", back_populates="tasks")
     board = relationship("KanbanBoards", back_populates="tasks")
-    # events = relationship("CalendarTasks", back_populates="tasks")
     users = relationship("Users", secondary=users_tasks_table, back_populates="tasks")
-    
+    assigners = relationship("Users", secondary=task_assigners_table, back_populates="assigned_tasks")
 
 
 class Groups(Base):
