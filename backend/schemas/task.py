@@ -40,13 +40,19 @@ class Task(TaskBase):
     task_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    status: TaskStatus
+    priority: Optional[TaskPriority] = None
 
     class Config:
         from_attributes = True
     
-    # @field_serializer("user_id")
-    # def serialize_user_id(self, obj):
-    #     return obj.user_id
+    @field_serializer('status')
+    def serialize_status(self, status: TaskStatus, _info):
+        return status.value
+
+    @field_serializer('priority')
+    def serialize_priority(self, priority: Optional[TaskPriority], _info):
+        return priority.value if priority else None
 
 class TaskResponse(TaskBase):
     task_id: int
@@ -56,9 +62,19 @@ class TaskResponse(TaskBase):
     board_id: Optional[int] = None
     user_ids: List[int]  # ID исполнителей
     assigner_id: int  # ID назначившего
+    status: TaskStatus
+    priority: Optional[TaskPriority] = None
 
     class Config:
         from_attributes = True
+
+    @field_serializer('status')
+    def serialize_status(self, status: TaskStatus, _info):
+        return status.value
+
+    @field_serializer('priority')
+    def serialize_priority(self, priority: Optional[TaskPriority], _info):
+        return priority.value if priority else None
 
 class TaskStats(BaseModel):
     total_tasks: int

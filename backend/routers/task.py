@@ -6,11 +6,11 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from sqlalchemy import func
+from pydantic import BaseModel
 
 from schemas.task import Task, TaskBase, TaskResponse
 
 router = APIRouter()
-
 
 
 #Создание новой задачи
@@ -19,13 +19,19 @@ def create_task(task: TaskBase, db: Session = Depends(get_db)):
     task_data = task.model_dump()
     # Устанавливаем дефолтные значения
     task_data["status"] = "todo"
-    task_data["group_id"] = 1
-    task_data["board_id"] = 1
+    
+    # Если group_id не указан, используем группу по умолчанию
+    if not task_data.get("group_id"):
+        task_data["group_id"] = 1
+    
+    # Если board_id не указан, используем доску по умолчанию
+    if not task_data.get("board_id"):
+        task_data["board_id"] = 1
     
     # Получаем ID исполнителей и назначившего
     user_ids = task_data.pop("user_ids", [2])  # По умолчанию user_id = 2
     assigner_id = task_data.pop("assigner_id", 1)  # По умолчанию user_id = 1
-    
+
     # Создаем задачу
     db_task = models.Tasks(**task_data)
     db.add(db_task)
@@ -54,8 +60,11 @@ def create_task(task: TaskBase, db: Session = Depends(get_db)):
     return response
 
 @router.get("/tasks", response_model=List[Task], summary="Получить список всех задач")
-def get_tasks(db: Session = Depends(get_db)):
-    return db.query(models.Tasks).all()
+def get_tasks(group_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(models.Tasks)
+    if group_id:
+        query = query.filter(models.Tasks.group_id == group_id)
+    return query.all()
 
 # Чтение 1 задачи по ID
 @router.get("/tasks/{task_id}", response_model=Task, summary="Получить задачу по ID")
@@ -100,13 +109,16 @@ def search_tasks(query: str, db: Session = Depends(get_db)):
 
 # Получение задач с истекающим дедлайном
 @router.get("/tasks/upcoming", response_model=List[Task], summary="Получить задачи с истекающим дедлайном")
-def get_upcoming_tasks(days: int = 7, db: Session = Depends(get_db)):
+def get_upcoming_tasks(days: int = 7, group_id: Optional[int] = None, db: Session = Depends(get_db)):
     today = datetime.now()
     deadline = today + timedelta(days=days)
-    return db.query(models.Tasks).filter(
+    query = db.query(models.Tasks).filter(
         models.Tasks.deadline <= deadline,
         models.Tasks.status != "done"
-    ).all()
+    )
+    if group_id:
+        query = query.filter(models.Tasks.group_id == group_id)
+    return query.all()
 
 # Массовое обновление статуса задач
 @router.put("/tasks/bulk/status", summary="Массовое обновление статуса задач")
@@ -119,10 +131,13 @@ def bulk_update_task_status(task_ids: List[int], new_status: str, db: Session = 
 
 # Получение задач по приоритету
 @router.get("/tasks/priority/{priority}", response_model=List[Task], summary="Получить задачи по приоритету")
-def get_tasks_by_priority(priority: int, db: Session = Depends(get_db)):
-    return db.query(models.Tasks).filter(models.Tasks.priority == priority).all()
+def get_tasks_by_priority(priority: int, group_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(models.Tasks).filter(models.Tasks.priority == priority)
+    if group_id:
+        query = query.filter(models.Tasks.group_id == group_id)
+    return query.all()
 
-# Получение задач по группе
+# Получение задач по группе 
 @router.get("/tasks/group/{group_id}", response_model=List[Task], summary="Получить задачи по группе")
 def get_tasks_by_group(group_id: int, db: Session = Depends(get_db)):
     return db.query(models.Tasks).filter(models.Tasks.group_id == group_id).all()
@@ -140,6 +155,20 @@ def get_task_stats(db: Session = Depends(get_db)):
         "total_tasks": total_tasks,
         "tasks_by_status": dict(tasks_by_status)
     }
+
+class TaskStatusUpdate(BaseModel):
+    status: str
+
+@router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить статус задачи")
+def update_task_status(task_id: int, status_update: TaskStatusUpdate, db: Session = Depends(get_db)):
+    task = db.query(models.Tasks).filter(models.Tasks.task_id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task.status = status_update.status
+    db.commit()
+    db.refresh(task)
+    return task
 
 '''
 {

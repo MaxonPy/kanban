@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, useSensor, useSensors, PointerSensor } from '@dnd-kit/core';
 import { HeaderByAnima } from "./sections/HeaderByAnima/HeaderByAnima";
 import { OverlapGroupWrapperByAnima } from "./sections/OverlapGroupWrapperByAnima";
@@ -15,50 +15,66 @@ export interface Task {
   priority: string;
   dueDate: string;
   status: 'assigned' | 'inProgress' | 'completed';
+  group_id: number;
+  group_name: string;
 }
 
 export const Desktop = (): JSX.Element => {
-  const [tasks, setTasks] = useState<Task[]>([
-    {
-      id: 1,
-      subject: "Функциональное программирование",
-      description: "Изучить синтаксис языка Haskell",
-      assignedBy: "Бождай А.С.",
-      priority: "высокий",
-      dueDate: "15.05.25",
-      status: 'assigned'
-    },
-    {
-      id: 2,
-      subject: "ООП",
-      description: "Прочитать теорию по делегатам в С#",
-      assignedBy: "Подмарькова Е.М.",
-      priority: "средний",
-      dueDate: "23.05.25",
-      status: 'assigned'
-    },
-    {
-      id: 3,
-      subject: "Информационные технологии",
-      description: "Выполнить лабораторную работу №2",
-      assignedBy: "Бождай А.С.",
-      priority: "высокий",
-      dueDate: "5.05.25",
-      status: 'inProgress'
-    },
-    {
-      id: 4,
-      subject: "Экономика",
-      description: "Подготовка к зачету",
-      assignedBy: "Влазнева С.А.",
-      priority: "средний",
-      dueDate: "05.04.25",
-      status: 'completed'
-    },
-  ]);
-
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [users, setUsers] = useState<Record<number, string>>({});
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<{ id: number; name: string } | null>(null);
+
+  const fetchTasks = async () => {
+    if (!selectedGroup) return;
+    
+    try {
+      const response = await fetch(`http://localhost:8000/tasks/group/${selectedGroup.id}`);
+      const data = await response.json();
+      const mappedTasks = data.map((task: any) => ({
+        id: task.task_id,
+        subject: task.title,
+        description: task.description || '',
+        assignedBy: users[task.assigner_id] || 'Неизвестно',
+        priority: task.priority || 'средний',
+        dueDate: task.deadline ? new Date(task.deadline).toLocaleDateString() : 'Нет срока',
+        status: typeof task.status === 'string' && task.status.toLowerCase() === 'todo'
+          ? 'assigned'
+          : typeof task.status === 'string' && task.status.toLowerCase() === 'in_progress'
+            ? 'inProgress'
+            : 'completed',
+        group_id: task.group_id,
+        group_name: selectedGroup.name
+      }));
+      setTasks(mappedTasks);
+    } catch (error) {
+      console.error('Ошибка при загрузке задач:', error);
+    }
+  };
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/users');
+        const data = await response.json();
+        const userMap: Record<number, string> = {};
+        data.forEach((user: any) => {
+          userMap[user.user_id] = user.name;
+        });
+        setUsers(userMap);
+      } catch (error) {
+        console.error('Ошибка при загрузке пользователей:', error);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  useEffect(() => {
+    if (selectedGroup) {
+      fetchTasks();
+    }
+  }, [selectedGroup]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -69,69 +85,134 @@ export const Desktop = (): JSX.Element => {
   );
 
   const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(Number(event.active.id));
+    setActiveId(event.active.id as number);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    
+
     if (over && active.id !== over.id) {
-      setTasks(tasks.map(task => {
-        if (task.id === Number(active.id)) {
-          return {
-            ...task,
-            status: over.id as 'assigned' | 'inProgress' | 'completed'
-          };
-        }
-        return task;
-      }));
+      const activeTask = tasks.find((task) => task.id === active.id);
+      if (!activeTask) return;
+
+      let newStatus: Task['status'] = 'assigned';
+      if (over.id === 'inProgress') newStatus = 'inProgress';
+      if (over.id === 'completed') newStatus = 'completed';
+
+      const movedTask = {
+        ...activeTask,
+        status: newStatus,
+      };
+
+      // Оптимистичное обновление UI
+      setTasks((prevTasks) =>
+        prevTasks.map((task) =>
+          task.id === movedTask.id ? movedTask : task
+        )
+      );
+
+      try {
+        // Отправляем обновление на сервер
+        await fetch(`http://localhost:8000/tasks/${activeTask.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            status: newStatus === 'assigned' ? 'todo' : newStatus === 'inProgress' ? 'in_progress' : 'done',
+          }),
+        });
+
+        // Обновляем данные с сервера после успешного обновления
+        await fetchTasks();
+      } catch (error) {
+        console.error('Ошибка при обновлении статуса задачи:', error);
+        // В случае ошибки возвращаем предыдущее состояние
+        setTasks(prevTasks => 
+          prevTasks.map(task => 
+            task.id === movedTask.id 
+              ? { ...task, status: movedTask.status }
+              : task
+          )
+        );
+      }
     }
-    
     setActiveId(null);
   };
 
+  const handleDragCancel = () => {
+    setActiveId(null);
+  };
+
+  const getFilteredTasks = (status: Task['status']) => {
+    return tasks.filter((task) => task.status === status);
+  };
+
+  const handleAddTask = () => {
+    setIsTaskDialogOpen(true);
+  };
+
+  const handleCloseTaskDialog = () => {
+    setIsTaskDialogOpen(false);
+  };
+
+  const handleGroupSelect = (group: { id: number; name: string }) => {
+    setSelectedGroup(group);
+  };
+
   return (
-    <div className="flex justify-center w-full min-h-screen bg-transparent">
-      <div className="w-full">
-        <div className="flex flex-col w-full h-full bg-[#eae7dc] min-h-screen">
-          <HeaderByAnima onNewTask={() => setIsDialogOpen(true)} />
+    <div className="flex flex-col min-h-screen bg-[#f5f5dc]">
+      <HeaderByAnima 
+        onNewTask={handleAddTask} 
+        selectedGroup={selectedGroup?.name || ''}
+        onGroupSelect={handleGroupSelect}
+      />
+      <div className="flex-1 p-6">
+        {selectedGroup ? (
           <DndContext
             sensors={sensors}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
           >
-            <div className="flex flex-row justify-between gap-6 px-6 py-4 h-[calc(100vh-120px)]">
-              <div className="flex-1 min-w-0">
-                <OverlapGroupWrapperByAnima
-                  tasks={tasks.filter(task => task.status === 'assigned')}
-                  activeId={activeId}
-                  onAddTask={() => setIsDialogOpen(true)}
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <OverlapWrapperByAnima
-                  tasks={tasks.filter(task => task.status === 'inProgress')}
-                  activeId={activeId}
-                  onAddTask={() => setIsDialogOpen(true)}
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <ViewByAnima
-                  tasks={tasks.filter(task => task.status === 'completed')}
-                  activeId={activeId}
-                  onAddTask={() => setIsDialogOpen(true)}
-                />
-              </div>
+            <div className="grid grid-cols-3 gap-6">
+              <OverlapGroupWrapperByAnima
+                tasks={getFilteredTasks('assigned')}
+                activeId={activeId}
+                onAddTask={handleAddTask}
+              />
+              <OverlapWrapperByAnima
+                tasks={getFilteredTasks('inProgress')}
+                activeId={activeId}
+                onAddTask={handleAddTask}
+              />
+              <ViewByAnima
+                tasks={getFilteredTasks('completed')}
+                activeId={activeId}
+                onAddTask={handleAddTask}
+              />
             </div>
-            <DragOverlay dropAnimation={null} style={{zIndex: 9999}}>
-              {activeId !== null ? (
-                <DraggableTask task={tasks.find(t => t.id === activeId)!} activeId={activeId} />
+            <DragOverlay>
+              {activeId ? (
+                <DraggableTask
+                  task={tasks.find((task) => task.id === activeId)!}
+                  activeId={activeId}
+                />
               ) : null}
             </DragOverlay>
           </DndContext>
-          <TaskDialog open={isDialogOpen} onOpenChange={setIsDialogOpen} />
-        </div>
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-xl text-gray-500">Выберите группу для просмотра задач</p>
+          </div>
+        )}
       </div>
+      <TaskDialog 
+        open={isTaskDialogOpen} 
+        onOpenChange={setIsTaskDialogOpen} 
+        onTaskCreated={fetchTasks}
+        selectedGroup={selectedGroup}
+      />
     </div>
   );
 };

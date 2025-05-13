@@ -67,6 +67,7 @@ class Tasks(Base):
     deadline = Column(DateTime, nullable=True)
     status = Column(Enum(TaskStatusEnum), nullable=False, default=TaskStatusEnum.todo)
     assigned_files = Column(Integer)
+    priority = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now())
     updated_at = Column(DateTime, default=datetime.now(), onupdate=datetime.now())
 
