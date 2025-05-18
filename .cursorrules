@@ -1,0 +1,10 @@
+Я пишу канбан доску для преподователей и студентов.
+Используемый стек технологий:
+- Next.js
+- Python
+- SQLAlchemy
+- FastAPI
+- PostgreSQL
+- Pydantic
+- JavaScript
+

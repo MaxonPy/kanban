@@ -5,6 +5,7 @@ import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
 import { SideMenu } from "../../../../components/SideMenu";
+import { useAuth } from '../../../../lib/auth/AuthContext';
 
 interface HeaderByAnimaProps {
   onNewTask: () => void;
@@ -14,6 +15,8 @@ interface HeaderByAnimaProps {
 
 export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: HeaderByAnimaProps): JSX.Element => {
   const [isSideMenuOpen, setIsSideMenuOpen] = React.useState(false);
+  const { logout, userType } = useAuth();
+  const roleText = userType === 'teacher' ? 'Преподаватель' : userType === 'student' ? 'Студент' : '';
 
   return (
     <>
@@ -60,6 +63,11 @@ export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: Heade
             >
               НОВАЯ ЗАДАЧА
             </Button>
+            {roleText && (
+              <div className="flex items-center bg-white px-3 py-1 rounded-lg border border-solid border-black text-black font-semibold text-sm">
+                {roleText}
+              </div>
+            )}
             <Avatar className="w-[42px] h-[42px]">
               <img
                 className="w-full h-full object-cover"
@@ -67,9 +75,9 @@ export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: Heade
                 src="/profile.png"
               />
             </Avatar>
-            <div className="flex items-center">
+            <button className="flex items-center" onClick={logout} title="Выйти">
               <img className="w-10 h-[37px]" alt="Log out" src="/log-out-1.svg" />
-            </div>
+            </button>
           </div>
         </div>
 
