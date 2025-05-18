@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, useSensor, useSensors, PointerSensor } from '@dnd-kit/core';
 import { HeaderByAnima } from "./sections/HeaderByAnima/HeaderByAnima";
 import { OverlapGroupWrapperByAnima } from "./sections/OverlapGroupWrapperByAnima";
@@ -6,6 +6,7 @@ import { OverlapWrapperByAnima } from "./sections/OverlapWrapperByAnima/OverlapW
 import { ViewByAnima } from "./sections/ViewByAnima/ViewByAnima";
 import { TaskDialog } from "../../components/TaskDialog";
 import { DraggableTask } from "./sections/DraggableTask";
+import { useAuth } from '../../lib/auth/AuthContext';
 
 export interface Task {
   id: number;
@@ -25,13 +26,20 @@ export const Desktop = (): JSX.Element => {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<{ id: number; name: string } | null>(null);
+  const { userType, currentUser } = useAuth();
 
   const fetchTasks = async () => {
     if (!selectedGroup) return;
-    
     try {
-      const response = await fetch(`http://localhost:8000/tasks/group/${selectedGroup.id}`);
-      const data = await response.json();
+      let response, data;
+      if (userType === 'student' && currentUser) {
+        response = await fetch(`http://localhost:8000/users_tasks/${currentUser.user_id}`);
+        data = await response.json();
+        // data — массив задач, назначенных студенту
+      } else {
+        response = await fetch(`http://localhost:8000/tasks/group/${selectedGroup.id}`);
+        data = await response.json();
+      }
       const mappedTasks = data.map((task: any) => ({
         id: task.task_id,
         subject: task.title,
@@ -52,6 +60,8 @@ export const Desktop = (): JSX.Element => {
       console.error('Ошибка при загрузке задач:', error);
     }
   };
+
+  const fetchTasksRef = useRef(fetchTasks);
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -76,6 +86,81 @@ export const Desktop = (): JSX.Element => {
     }
   }, [selectedGroup]);
 
+  useEffect(() => {
+    fetchTasksRef.current = fetchTasks;
+  }, [fetchTasks]);
+
+  // Автоматически выбираем группу 21ВА1 для студента
+  useEffect(() => {
+    if (userType === 'student' && !selectedGroup) {
+      setSelectedGroup({ id: 1, name: '21ВА1' });
+    }
+  }, [userType, selectedGroup]);
+
+  useEffect(() => {
+    if (userType && currentUser) {
+      let ws: WebSocket | null = null;
+      let reconnectAttempts = 0;
+      const maxReconnectAttempts = 5;
+      const reconnectDelay = 3000; // 3 seconds
+
+      const connectWebSocket = () => {
+        try {
+          ws = new WebSocket('ws://localhost:8000/ws/tasks');
+          
+          ws.onopen = () => {
+            console.log('WebSocket connection established');
+            reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (
+                ['new_task', 'delete_task', 'update_status'].includes(data.event) &&
+                data.user_id === currentUser.user_id
+              ) {
+                if (data.timestamp) {
+                  const now = Date.now();
+                  const delay = now - data.timestamp;
+                  console.log(`WS задержка (мс):`, delay);
+                }
+                fetchTasksRef.current();
+              }
+            } catch (error) {
+              console.error('Error parsing WebSocket message:', error);
+            }
+          };
+
+          ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+          };
+
+          ws.onclose = () => {
+            console.log('WebSocket connection closed');
+            if (reconnectAttempts < maxReconnectAttempts) {
+              reconnectAttempts++;
+              console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
+              setTimeout(connectWebSocket, reconnectDelay);
+            } else {
+              console.error('Max reconnection attempts reached');
+            }
+          };
+        } catch (error) {
+          console.error('Error creating WebSocket connection:', error);
+        }
+      };
+
+      connectWebSocket();
+
+      return () => {
+        if (ws) {
+          ws.close();
+        }
+      };
+    }
+  }, [userType, currentUser]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -99,20 +184,14 @@ export const Desktop = (): JSX.Element => {
       if (over.id === 'inProgress') newStatus = 'inProgress';
       if (over.id === 'completed') newStatus = 'completed';
 
-      const movedTask = {
-        ...activeTask,
-        status: newStatus,
-      };
-
-      // Оптимистичное обновление UI
+      // 1. Сразу обновляем UI (оптимистично)
       setTasks((prevTasks) =>
         prevTasks.map((task) =>
-          task.id === movedTask.id ? movedTask : task
+          task.id === activeTask.id ? { ...task, status: newStatus } : task
         )
       );
 
       try {
-        // Отправляем обновление на сервер
         await fetch(`http://localhost:8000/tasks/${activeTask.id}`, {
           method: 'PATCH',
           headers: {
@@ -122,22 +201,35 @@ export const Desktop = (): JSX.Element => {
             status: newStatus === 'assigned' ? 'todo' : newStatus === 'inProgress' ? 'in_progress' : 'done',
           }),
         });
-
-        // Обновляем данные с сервера после успешного обновления
-        await fetchTasks();
+        // Можно ничего не делать — WebSocket обновит, если что-то изменится на сервере
       } catch (error) {
-        console.error('Ошибка при обновлении статуса задачи:', error);
-        // В случае ошибки возвращаем предыдущее состояние
-        setTasks(prevTasks => 
-          prevTasks.map(task => 
-            task.id === movedTask.id 
-              ? { ...task, status: movedTask.status }
-              : task
+        // 2. Если ошибка — откатываем UI обратно
+        setTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task.id === activeTask.id ? { ...task, status: activeTask.status } : task
           )
         );
+        console.error('Ошибка при обновлении статуса задачи:', error);
       }
     }
     setActiveId(null);
+  };
+
+  const handleDeleteTask = async (taskId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8000/tasks/${taskId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Оптимистичное обновление UI
+        setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
+      } else {
+        console.error('Ошибка при удалении задачи');
+      }
+    } catch (error) {
+      console.error('Ошибка при удалении задачи:', error);
+    }
   };
 
   const handleDragCancel = () => {
@@ -180,16 +272,19 @@ export const Desktop = (): JSX.Element => {
                 tasks={getFilteredTasks('assigned')}
                 activeId={activeId}
                 onAddTask={handleAddTask}
+                onDeleteTask={handleDeleteTask}
               />
               <OverlapWrapperByAnima
                 tasks={getFilteredTasks('inProgress')}
                 activeId={activeId}
                 onAddTask={handleAddTask}
+                onDeleteTask={handleDeleteTask}
               />
               <ViewByAnima
                 tasks={getFilteredTasks('completed')}
                 activeId={activeId}
                 onAddTask={handleAddTask}
+                onDeleteTask={handleDeleteTask}
               />
             </div>
             <DragOverlay>

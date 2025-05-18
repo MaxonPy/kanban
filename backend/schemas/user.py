@@ -1,12 +1,11 @@
-from datetime import datetime
-from typing import Optional, List
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from enum import Enum
+from typing import Optional
+from datetime import datetime
 
 class RoleEnum(str, Enum):
     teacher = "teacher"
     student = "student"
-    admin = "admin"
 
 class UserBase(BaseModel):
     telegram_id: int = Field(..., gt=0)
@@ -26,18 +25,6 @@ class UserUpdate(BaseModel):
 class User(UserBase):
     user_id: int
     created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class UserStats(BaseModel):
-    user_name: str
-    total_tasks: int
-    tasks_by_status: dict[str, int]
-    total_boards: int
-
-class UserWithTaskCount(User):
-    task_count: int
 
     class Config:
         from_attributes = True

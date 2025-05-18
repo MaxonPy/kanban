@@ -1,22 +1,21 @@
 from typing import Annotated, List
-from fastapi import APIRouter, HTTPException, Query
-import models
-from db import get_db
-from fastapi import Depends
+from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 
-from schemas.board import BoardBase
-from schemas.task import Task
-from schemas.user import User, UserUpdate
+from ..models import Users, Tasks, KanbanBoards, users_tasks_table
+from ..db import get_db
+from ..schemas.board import Board
+from ..schemas.task import Task
+from ..schemas.user import User, UserCreate, UserUpdate
 
 router = APIRouter()
 
 # Создание пользователя в БД 
 @router.post("/users", response_model=User, summary="Создать нового пользователя")
-def create_user(user: Annotated[User, Depends()], db: Session = Depends(get_db)):
-    db_user = models.Users(**user.model_dump())
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = Users(**user.model_dump())
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
@@ -25,7 +24,7 @@ def create_user(user: Annotated[User, Depends()], db: Session = Depends(get_db))
 # Получение задач по ID пользователя
 @router.get("/users/{user_id}/tasks", response_model=List[Task], summary="Получить задачи пользователя по ID")
 def get_tasks_for_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.get(models.Users, user_id)
+    user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user.tasks
@@ -33,25 +32,25 @@ def get_tasks_for_user(user_id: int, db: Session = Depends(get_db)):
 # Получить всех пользователей
 @router.get("/users", response_model=List[User], summary="Получить всех пользователей")
 def get_users(db: Session = Depends(get_db)):
-    return db.query(models.Users).all()
+    return db.query(Users).all()
 
 # Получить всех пользователей
 @router.get("/users/{user_id}", response_model=User, summary="Получить пользователя по ID")
 def get_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.get(models.Users, user_id)
+    user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
 # Получение досок пользователя
-@router.get("/users/{user_id}/boards", response_model=List[BoardBase], summary="Получить доски пользователя по ID")
+@router.get("/users/{user_id}/boards", response_model=List[Board], summary="Получить доски пользователя по ID")
 def get_user_boards(user_id: int, db: Session = Depends(get_db)):
-    return db.query(models.KanbanBoards).filter(models.KanbanBoards.user_id == user_id).all()
+    return db.query(KanbanBoards).filter(KanbanBoards.user_id == user_id).all()
 
 # Обновление пользователя
 @router.put("/users/{user_id}", response_model=User, summary="Обновить данные пользователя")
 def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get_db)):
-    user = db.get(models.Users, user_id)
+    user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     for key, value in user_update.model_dump(exclude_unset=True).items():
@@ -63,7 +62,7 @@ def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get
 # Удаление пользователя
 @router.delete("/users/{user_id}", summary="Удалить пользователя по ID")
 def delete_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.get(models.Users, user_id)
+    user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     db.delete(user)
@@ -73,20 +72,20 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
 # Получение статистики пользователя
 @router.get("/users/{user_id}/stats", summary="Получить статистику пользователя")
 def get_user_stats(user_id: int, db: Session = Depends(get_db)):
-    user = db.get(models.Users, user_id)
+    user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
     total_tasks = len(user.tasks)
     tasks_by_status = db.query(
-        models.Tasks.status,
-        func.count(models.Tasks.task_id)
-    ).join(models.users_tasks_table).filter(
-        models.users_tasks_table.c.user_id == user_id
-    ).group_by(models.Tasks.status).all()
+        Tasks.status,
+        func.count(Tasks.task_id)
+    ).join(users_tasks_table).filter(
+        users_tasks_table.c.user_id == user_id
+    ).group_by(Tasks.status).all()
     
-    total_boards = db.query(models.KanbanBoards).filter(
-        models.KanbanBoards.user_id == user_id
+    total_boards = db.query(KanbanBoards).filter(
+        KanbanBoards.user_id == user_id
     ).count()
     
     return {
@@ -99,37 +98,37 @@ def get_user_stats(user_id: int, db: Session = Depends(get_db)):
 # Поиск пользователей по имени
 @router.get("/users/search", response_model=List[User], summary="Поиск пользователей по имени")
 def search_users(query: str, db: Session = Depends(get_db)):
-    return db.query(models.Users).filter(models.Users.name.ilike(f"%{query}%")).all()
+    return db.query(Users).filter(Users.name.ilike(f"%{query}%")).all()
 
 # Получение пользователей по роли
 @router.get("/users/role/{role}", response_model=List[User], summary="Получить пользователей по роли")
 def get_users_by_role(role: str, db: Session = Depends(get_db)):
-    return db.query(models.Users).filter(models.Users.role == role).all()
+    return db.query(Users).filter(Users.role == role).all()
 
 # Получение активных пользователей
 @router.get("/users/active", response_model=List[User], summary="Получить активных пользователей за последние дни")
 def get_active_users(days: int = 30, db: Session = Depends(get_db)):
-    cutoff_date = datetime.now() - timedelta(days=30)
-    return db.query(models.Users).join(
-        models.users_tasks_table
+    cutoff_date = datetime.now() - timedelta(days=days)
+    return db.query(Users).join(
+        users_tasks_table
     ).join(
-        models.Tasks
+        Tasks
     ).filter(
-        models.Tasks.updated_at >= cutoff_date
+        Tasks.updated_at >= cutoff_date
     ).distinct().all()
 
 # Получение пользователей с наибольшим количеством задач
 @router.get("/users/most-tasks", response_model=List[User], summary="Получить пользователей с наибольшим количеством задач")
 def get_users_with_most_tasks(limit: int = 5, db: Session = Depends(get_db)):
     return db.query(
-        models.Users,
-        func.count(models.users_tasks_table.c.task_id).label('task_count')
+        Users,
+        func.count(users_tasks_table.c.task_id).label('task_count')
     ).join(
-        models.users_tasks_table
+        users_tasks_table
     ).group_by(
-        models.Users.user_id
+        Users.user_id
     ).order_by(
-        func.count(models.users_tasks_table.c.task_id).desc()
+        func.count(users_tasks_table.c.task_id).desc()
     ).limit(limit).all()
 
 '''

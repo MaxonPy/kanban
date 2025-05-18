@@ -20,11 +20,10 @@ class TaskBase(BaseModel):
     assigned_files: Optional[int] = None
     group_id: Optional[int] = None
     board_id: Optional[int] = None
-    user_ids: List[int] = []  # Исполнители задачи
     assigner_id: Optional[int] = 1  # ID пользователя, который назначил задачу (по умолчанию 1)
 
 class TaskCreate(TaskBase):
-    pass
+    user_id: Optional[int] = None  # ID исполнителя задачи (студента)
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=200)
@@ -36,12 +35,17 @@ class TaskUpdate(BaseModel):
     group_id: Optional[int] = Field(None, gt=0)
     deadline: Optional[datetime] = None
 
+class TaskAssignment(BaseModel):
+    user_id: int = Field(gt=0, description="ID пользователя, которому назначается задача")
+    task_id: int = Field(gt=0, description="ID задачи для назначения")
+
 class Task(TaskBase):
     task_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
     status: TaskStatus
     priority: Optional[TaskPriority] = None
+    user_ids: List[int] = []  # ID исполнителей задачи
 
     class Config:
         from_attributes = True

@@ -1,32 +1,29 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
 from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel
 
 class BoardBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    user_id: int = Field(..., gt=0)
-    
+    title: str
+    description: Optional[str] = None
+
 class BoardCreate(BoardBase):
     pass
 
 class BoardUpdate(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    user_id: Optional[int] = Field(None, gt=0)
+    title: Optional[str] = None
+    description: Optional[str] = None
 
-class KanbanBoards(BoardBase):
+class Board(BoardBase):
     board_id: int
-    created_at: Optional[datetime]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    user_id: int
 
     class Config:
         from_attributes = True
 
-class BoardStats(BaseModel):
-    board_name: str
-    total_tasks: int
-    tasks_by_status: Dict[str, int]
-
-class BoardWithTaskCount(KanbanBoards):
-    task_count: int
+class BoardWithTasks(Board):
+    tasks: List[dict]
 
     class Config:
         from_attributes = True

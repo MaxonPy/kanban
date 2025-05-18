@@ -1,24 +1,22 @@
-from typing import Annotated, List, Optional
-from fastapi import APIRouter, HTTPException, Query
-import models
-from db import get_db
-from fastapi import Depends
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
 from sqlalchemy import func
-from pydantic import BaseModel
+from datetime import datetime, timedelta
 
-from schemas.task import Task, TaskBase, TaskResponse
+from ..models import Tasks, Users, users_tasks_table
+from ..db import get_db
+from ..schemas.task import Task, TaskCreate, TaskUpdate, TaskResponse, TaskStatus, BulkTaskUpdate, TaskAssignment
+from sqlalchemy import Table, Column, Integer, String, DateTime, ForeignKey
+from .ws_notify import notify_students_about_task
 
 router = APIRouter()
 
-
-#Создание новой задачи
 @router.post("/tasks", response_model=TaskResponse, summary="Создать новую задачу")
-def create_task(task: TaskBase, db: Session = Depends(get_db)):
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     task_data = task.model_dump()
     # Устанавливаем дефолтные значения
-    task_data["status"] = "todo"
+    task_data["status"] = TaskStatus.TODO
     
     # Если group_id не указан, используем группу по умолчанию
     if not task_data.get("group_id"):
@@ -28,24 +26,27 @@ def create_task(task: TaskBase, db: Session = Depends(get_db)):
     if not task_data.get("board_id"):
         task_data["board_id"] = 1
     
-    # Получаем ID исполнителей и назначившего
-    user_ids = task_data.pop("user_ids", [2])  # По умолчанию user_id = 2
-    assigner_id = task_data.pop("assigner_id", 1)  # По умолчанию user_id = 1
+    # Получаем ID исполнителя и назначившего
+    user_id = task_data.pop("user_id")  # ID исполнителя (студента)
+    assigner_id = task_data.pop("assigner_id", 1)  # ID назначившего (преподавателя)
 
     # Создаем задачу
-    db_task = models.Tasks(**task_data)
+    db_task = Tasks(**task_data)
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
 
-    # Добавляем исполнителей
-    for user_id in user_ids:
-        user = db.get(models.Users, user_id)
-        if user:
-            db_task.users.append(user)
+    # Если указан исполнитель, добавляем запись в таблицу users_tasks
+    if user_id is not None:
+        stmt = users_tasks_table.insert().values(
+            user_id=user_id,
+            task_id=db_task.task_id,
+            assigned_at=datetime.now()
+        )
+        db.execute(stmt)
 
     # Добавляем назначившего
-    assigner = db.get(models.Users, assigner_id)
+    assigner = db.get(Users, assigner_id)
     if assigner:
         db_task.assigners.append(assigner)
 
@@ -54,121 +55,200 @@ def create_task(task: TaskBase, db: Session = Depends(get_db)):
 
     response = TaskResponse(
         **db_task.__dict__,
-        user_ids=[user.user_id for user in db_task.users],
+        user_ids=[user_id] if user_id is not None else [],  # Добавляем ID исполнителя в ответ, если он есть
         assigner_id=assigner_id
     )
     return response
 
 @router.get("/tasks", response_model=List[Task], summary="Получить список всех задач")
 def get_tasks(group_id: Optional[int] = None, db: Session = Depends(get_db)):
-    query = db.query(models.Tasks)
+    query = db.query(Tasks)
     if group_id:
-        query = query.filter(models.Tasks.group_id == group_id)
+        query = query.filter(Tasks.group_id == group_id)
     return query.all()
 
-# Чтение 1 задачи по ID
 @router.get("/tasks/{task_id}", response_model=Task, summary="Получить задачу по ID")
 def get_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.get(models.Tasks, task_id)
+    task = db.get(Tasks, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
-# Обновление задачи в БД
 @router.put("/tasks/{task_id}", response_model=Task, summary="Обновить задачу по ID")
-def update_task(task_id: int, task: Annotated[TaskBase, Depends()], db: Session = Depends(get_db)):
-    db_task = db.query(models.Tasks).filter(models.Tasks.task_id == task_id).first()
+def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
+    db_task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
-    for key, value in task.model_dump():
+    for key, value in task.model_dump(exclude_unset=True).items():
         setattr(db_task, key, value)
     db.commit()
     db.refresh(db_task)
     return db_task
 
-
-# Удаление задачи
 @router.delete("/tasks/{task_id}", summary="Удалить задачу по ID")
-def delete_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.get(models.Tasks, task_id)
+async def delete_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.get(Tasks, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Получаем всех пользователей, которым назначена задача
+    user_ids = [user.user_id for user in task.users]
     db.delete(task)
     db.commit()
+    # Оповещаем студентов
+    for user_id in user_ids:
+        await notify_students_about_task({
+            "event": "delete_task",
+            "user_id": user_id,
+            "task_id": task_id,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        })
     return {"detail": "Task deleted successfully"}
 
-# Фильтрация задач по статусу
 @router.get("/tasks/status/{status}", response_model=List[Task], summary="Получить задачи по статусу")
-def get_tasks_by_status(status: str, db: Session = Depends(get_db)):
-    return db.query(models.Tasks).filter(models.Tasks.status == status).all()
+def get_tasks_by_status(status: TaskStatus, db: Session = Depends(get_db)):
+    return db.query(Tasks).filter(Tasks.status == status).all()
 
-# Поиск задач по названию
 @router.get("/tasks/search", response_model=List[Task], summary="Поиск задач по названию")
 def search_tasks(query: str, db: Session = Depends(get_db)):
-    return db.query(models.Tasks).filter(models.Tasks.title.ilike(f"%{query}%")).all()
+    return db.query(Tasks).filter(Tasks.title.ilike(f"%{query}%")).all()
 
-# Получение задач с истекающим дедлайном
 @router.get("/tasks/upcoming", response_model=List[Task], summary="Получить задачи с истекающим дедлайном")
 def get_upcoming_tasks(days: int = 7, group_id: Optional[int] = None, db: Session = Depends(get_db)):
     today = datetime.now()
     deadline = today + timedelta(days=days)
-    query = db.query(models.Tasks).filter(
-        models.Tasks.deadline <= deadline,
-        models.Tasks.status != "done"
+    query = db.query(Tasks).filter(
+        Tasks.deadline <= deadline,
+        Tasks.status != TaskStatus.DONE
     )
     if group_id:
-        query = query.filter(models.Tasks.group_id == group_id)
+        query = query.filter(Tasks.group_id == group_id)
     return query.all()
 
-# Массовое обновление статуса задач
 @router.put("/tasks/bulk/status", summary="Массовое обновление статуса задач")
-def bulk_update_task_status(task_ids: List[int], new_status: str, db: Session = Depends(get_db)):
-    tasks = db.query(models.Tasks).filter(models.Tasks.task_id.in_(task_ids)).all()
+def bulk_update_task_status(update: BulkTaskUpdate, db: Session = Depends(get_db)):
+    tasks = db.query(Tasks).filter(Tasks.task_id.in_(update.task_ids)).all()
     for task in tasks:
-        task.status = new_status
+        task.status = update.status
     db.commit()
-    return {"detail": f"Updated {len(tasks)} tasks to status {new_status}"}
+    return {"detail": f"Updated {len(tasks)} tasks to status {update.status}"}
 
-# Получение задач по приоритету
 @router.get("/tasks/priority/{priority}", response_model=List[Task], summary="Получить задачи по приоритету")
-def get_tasks_by_priority(priority: int, group_id: Optional[int] = None, db: Session = Depends(get_db)):
-    query = db.query(models.Tasks).filter(models.Tasks.priority == priority)
+def get_tasks_by_priority(priority: str, group_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(Tasks).filter(Tasks.priority == priority)
     if group_id:
-        query = query.filter(models.Tasks.group_id == group_id)
+        query = query.filter(Tasks.group_id == group_id)
     return query.all()
 
-# Получение задач по группе 
 @router.get("/tasks/group/{group_id}", response_model=List[Task], summary="Получить задачи по группе")
 def get_tasks_by_group(group_id: int, db: Session = Depends(get_db)):
-    return db.query(models.Tasks).filter(models.Tasks.group_id == group_id).all()
+    return db.query(Tasks).filter(Tasks.group_id == group_id).all()
 
-# Получение статистики по задачам
 @router.get("/tasks/stats", summary="Получить статистику по задачам")
 def get_task_stats(db: Session = Depends(get_db)):
-    total_tasks = db.query(models.Tasks).count()
+    total_tasks = db.query(Tasks).count()
     tasks_by_status = db.query(
-        models.Tasks.status,
-        func.count(models.Tasks.task_id)
-    ).group_by(models.Tasks.status).all()
+        Tasks.status,
+        func.count(Tasks.task_id)
+    ).group_by(Tasks.status).all()
     
     return {
         "total_tasks": total_tasks,
         "tasks_by_status": dict(tasks_by_status)
     }
 
-class TaskStatusUpdate(BaseModel):
-    status: str
+@router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить задачу")
+async def update_task_status(task_id: int, task_update: TaskUpdate, db: Session = Depends(get_db)):
+    task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    update_data = task_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(task, key, value)
+    db.commit()
+    db.refresh(task)
+    # Получаем всех пользователей, которым назначена задача
+    user_ids = [user.user_id for user in task.users]
+    # Оповещаем студентов и преподавателей (assigners)
+    assigner_ids = [assigner.user_id for assigner in getattr(task, 'assigners', [])]
+    notify_ids = set(user_ids + assigner_ids)
+    for user_id in notify_ids:
+        await notify_students_about_task({
+            "event": "update_status",
+            "user_id": user_id,
+            "task_id": task_id,
+            "status": task.status.value if hasattr(task.status, 'value') else str(task.status),
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        })
+    return task
 
-@router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить статус задачи")
-def update_task_status(task_id: int, status_update: TaskStatusUpdate, db: Session = Depends(get_db)):
-    task = db.query(models.Tasks).filter(models.Tasks.task_id == task_id).first()
+@router.post("/users_tasks", summary="Назначить задачу пользователю")
+async def assign_task_to_user(assignment: TaskAssignment, db: Session = Depends(get_db)):
+    # Проверяем существование пользователя
+    user = db.get(Users, assignment.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Проверяем существование задачи
+    task = db.get(Tasks, assignment.task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    task.status = status_update.status
+    # Проверяем, не назначена ли уже задача этому пользователю
+    existing_assignment = db.query(users_tasks_table).filter(
+        users_tasks_table.c.user_id == assignment.user_id,
+        users_tasks_table.c.task_id == assignment.task_id
+    ).first()
+    
+    if existing_assignment:
+        raise HTTPException(status_code=400, detail="Task already assigned to this user")
+    
+    # Добавляем запись в таблицу users_tasks
+    stmt = users_tasks_table.insert().values(
+        user_id=assignment.user_id,
+        task_id=assignment.task_id,
+        assigned_at=datetime.now()
+    )
+    db.execute(stmt)
     db.commit()
-    db.refresh(task)
-    return task
+    
+    await notify_students_about_task({
+        "event": "new_task",
+        "user_id": assignment.user_id,
+        "task_id": assignment.task_id,
+        "timestamp": int(datetime.now().timestamp() * 1000)  # ms
+    })
+    
+    return {"detail": "Task assigned successfully"}
+
+@router.delete("/users_tasks", summary="Отменить назначение задачи пользователю")
+def remove_task_assignment(assignment: TaskAssignment, db: Session = Depends(get_db)):
+    # Проверяем существование назначения
+    existing_assignment = db.query(users_tasks_table).filter(
+        users_tasks_table.c.user_id == assignment.user_id,
+        users_tasks_table.c.task_id == assignment.task_id
+    ).first()
+    
+    if not existing_assignment:
+        raise HTTPException(status_code=404, detail="Task assignment not found")
+    
+    # Удаляем запись из таблицы users_tasks
+    stmt = users_tasks_table.delete().where(
+        users_tasks_table.c.user_id == assignment.user_id,
+        users_tasks_table.c.task_id == assignment.task_id
+    )
+    db.execute(stmt)
+    db.commit()
+    
+    return {"detail": "Task assignment removed successfully"}
+
+@router.get("/users_tasks/{user_id}", response_model=List[Task], summary="Получить все задачи пользователя")
+def get_user_tasks(user_id: int, db: Session = Depends(get_db)):
+    user = db.get(Users, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Явно делаем запрос к задачам пользователя для получения актуальных статусов
+    tasks = db.query(Tasks).join(Tasks.users).filter(Users.user_id == user_id).all()
+    return tasks
 
 '''
 {

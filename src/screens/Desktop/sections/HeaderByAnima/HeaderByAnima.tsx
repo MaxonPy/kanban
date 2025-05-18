@@ -29,11 +29,13 @@ export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: Heade
       <header className="w-full py-3 px-3 relative">
         <div className="flex flex-row items-center justify-between mb-5">
           <div className="flex space-x-3">
+            {userType !== 'student' && (
             <div className="flex items-center">
               <button onClick={() => setIsSideMenuOpen(true)}>
                 <img className="w-[39px] h-[37px]" alt="Grid" src="/grid-1.svg" />
               </button>
             </div>
+            )}
             <div className="flex items-center">
               <img
                 className="w-[39px] h-[37px]"
@@ -41,7 +43,7 @@ export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: Heade
                 src="/calendar-1.svg"
               />
             </div>
-            <div className="flex items-center justify-center w-[47px] h-[45px] bg-[#fffafa] rounded-lg border border-solid border-black shadow-[0px_4px_4px_#00000040]">
+            <div className="flex items-center justify-center w-[47px] h-[45px] bg-[#fffafa] rounded-lg border border-solid border-black shadow-[0px_4px_4px_#00000040] transition-all duration-200 hover:bg-[#eae7dc] hover:scale-105 hover:shadow-lg cursor-pointer focus:ring-2 focus:ring-[#eae7dc]">
               <img className="w-[39px] h-[37px]" alt="Users" src="/users-1.svg" />
             </div>
           </div>
@@ -57,12 +59,14 @@ export const HeaderByAnima = ({ onNewTask, selectedGroup, onGroupSelect }: Heade
           </div>
 
           <div className="flex items-center space-x-3">
-            <Button 
-              className="h-[41px] w-[140px] bg-[#eae7dc] text-black font-bold text-sm border border-solid border-black rounded-lg"
+            {userType !== 'student' && (
+            <Button
+              className="h-[41px] w-[160px] bg-[#f5f5dc] text-black font-bold text-base border border-solid border-black rounded-lg shadow transition-all duration-200 hover:bg-[#eae7dc] hover:scale-105 hover:shadow-lg focus:ring-2 focus:ring-[#eae7dc]"
               onClick={onNewTask}
             >
               НОВАЯ ЗАДАЧА
             </Button>
+            )}
             {roleText && (
               <div className="flex items-center bg-white px-3 py-1 rounded-lg border border-solid border-black text-black font-semibold text-sm">
                 {roleText}
