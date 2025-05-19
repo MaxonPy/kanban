@@ -4,6 +4,7 @@ import { FastForwardIcon, InfoIcon, Trash2Icon } from "lucide-react";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Task } from '../Desktop';
 import { Button } from "../../../components/ui/button";
+import { useAuth } from '../../../lib/auth/AuthContext';
 
 interface Props {
   task: Task;
@@ -16,6 +17,7 @@ export const DraggableTask = ({ task, activeId, onDelete, shadow }: Props): JSX.
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: task.id,
   });
+  const { userType } = useAuth();
 
   const style = {
     ...(transform ? {
@@ -38,43 +40,42 @@ export const DraggableTask = ({ task, activeId, onDelete, shadow }: Props): JSX.
     <Card
       ref={setNodeRef}
       style={style}
-      className="bg-white rounded-lg border border-solid border-black cursor-move relative"
+      className="bg-white border border-black rounded-xl shadow-sm cursor-move relative transition-all duration-200 hover:shadow-md"
       {...attributes}
       {...listeners}
     >
-      <CardContent className="p-2">
-        <div className="flex flex-col gap-[11px]">
-          <div className="[font-family:'Poppins',Helvetica] font-bold text-black text-[13px] tracking-[-0.26px] leading-[13.0px] whitespace-nowrap">
-            {task.subject}
-          </div>
-          <div className="[font-family:'Poppins',Helvetica] font-normal text-black text-[13px] tracking-[-0.26px] leading-[13.0px] whitespace-nowrap">
-            {task.description}
-          </div>
-          <div className="[font-family:'Poppins',Helvetica] font-normal text-black text-[11px] tracking-[-0.22px] leading-[11.0px]">
-            Назначено: {task.assignedBy}
-          </div>
-          <div className="[font-family:'Poppins',Helvetica] font-bold text-black text-[11px] tracking-[-0.22px] leading-[11.0px]">
-            Приоритет: {task.priority}
-          </div>
+      <CardContent className="p-4 flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
+          <div className="font-bold text-base text-black truncate">{task.subject}</div>
+          <div className="text-sm text-gray-700 break-words whitespace-pre-line">{task.description}</div>
         </div>
-        <div className="absolute top-2 right-2 flex gap-2">
-          <div className="flex items-center gap-1.5">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-gray-400">Назначено: <span className="text-gray-700 font-medium">{task.assignedBy}</span></span>
+          <span className="text-xs text-gray-400">Приоритет: <span className="text-gray-700 font-medium">{task.priority}</span></span>
+        </div>
+        <div className="absolute right-2 top-2 flex items-center gap-1.5 z-10">
+          {userType === 'teacher' && (
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7 p-0 flex items-center justify-center hover:bg-red-50 group"
               onClick={handleDelete}
             >
-              <Trash2Icon className="h-5 w-5 text-red-400 group-hover:text-red-600 transition-colors" />
+              <Trash2Icon className="h-8 w-8 text-red-400 group-hover:text-red-600 transition-colors" />
             </Button>
-            <InfoIcon className="w-5 h-5 text-gray-400" />
-          </div>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 p-0 flex items-center justify-center hover:bg-gray-100 group"
+            onClick={() => {/* TODO: handle info click, e.g., open details modal */}}
+          >
+            <InfoIcon className="h-8 w-8 text-gray-400 group-hover:text-blue-500 transition-colors" />
+          </Button>
         </div>
-        <div className="absolute bottom-2 right-2 flex items-center">
-          <FastForwardIcon className="w-3.5 h-3 mr-1" />
-          <span className="[font-family:'Poppins',Helvetica] font-normal text-black text-[11px] tracking-[-0.22px] leading-[11.0px]">
-            {task.dueDate}
-          </span>
+        <div className="absolute right-4 bottom-2 flex items-center gap-0.5 z-10">
+          <FastForwardIcon className="w-4 h-4 text-blue-500" />
+          <span className="text-sm font-bold text-blue-600 tracking-wide -mt-0.5 relative">{task.dueDate}</span>
         </div>
       </CardContent>
     </Card>

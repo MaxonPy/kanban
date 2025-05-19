@@ -125,7 +125,26 @@ export const Desktop = (): JSX.Element => {
                   const delay = now - data.timestamp;
                   console.log(`WS задержка (мс):`, delay);
                 }
-                fetchTasksRef.current();
+                // Если это обновление статуса, обновляем конкретную задачу
+                if (data.event === 'update_status') {
+                  setTasks(prevTasks => 
+                    prevTasks.map(task => 
+                      task.id === data.task_id 
+                        ? { 
+                            ...task, 
+                            status: data.status === 'todo' 
+                              ? 'assigned' 
+                              : data.status === 'in_progress' 
+                                ? 'inProgress' 
+                                : 'completed' 
+                          }
+                        : task
+                    )
+                  );
+                } else {
+                  // Для других событий обновляем все задачи
+                  fetchTasksRef.current();
+                }
               }
             } catch (error) {
               console.error('Error parsing WebSocket message:', error);

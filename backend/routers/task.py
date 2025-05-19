@@ -74,35 +74,77 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
-@router.put("/tasks/{task_id}", response_model=Task, summary="Обновить задачу по ID")
-def update_task(task_id: int, task: TaskUpdate, db: Session = Depends(get_db)):
-    db_task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
-    if not db_task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    for key, value in task.model_dump(exclude_unset=True).items():
-        setattr(db_task, key, value)
+@router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить задачу")
+async def update_task(task_id: int, task_update: TaskUpdate, db: Session = Depends(get_db)):
+    task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
+    if not task:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task with ID {task_id} not found"
+        )
+    
+    update_data = task_update.model_dump(exclude_unset=True)
+    old_status = task.status
+    for key, value in update_data.items():
+        setattr(task, key, value)
+    
     db.commit()
-    db.refresh(db_task)
-    return db_task
+    db.refresh(task)
+    
+    # Получаем всех пользователей, которым назначена задача
+    user_ids = [user.user_id for user in task.users]
+    # Оповещаем студентов и преподавателей (assigners)
+    assigner_ids = [assigner.user_id for assigner in getattr(task, 'assigners', [])]
+    notify_ids = set(user_ids + assigner_ids)
+    
+    # Отправляем уведомления всем заинтересованным пользователям
+    for user_id in notify_ids:
+        await notify_students_about_task({
+            "event": "update_status",
+            "user_id": user_id,
+            "task_id": task_id,
+            "status": task.status.value if hasattr(task.status, 'value') else str(task.status),
+            "old_status": old_status.value if hasattr(old_status, 'value') else str(old_status),
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        })
+    
+    return task
 
 @router.delete("/tasks/{task_id}", summary="Удалить задачу по ID")
 async def delete_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.get(Tasks, task_id)
+    # Используем query вместо get для единообразия с другими методами
+    task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    # Получаем всех пользователей, которым назначена задача
-    user_ids = [user.user_id for user in task.users]
-    db.delete(task)
-    db.commit()
-    # Оповещаем студентов
-    for user_id in user_ids:
-        await notify_students_about_task({
-            "event": "delete_task",
-            "user_id": user_id,
-            "task_id": task_id,
-            "timestamp": int(datetime.now().timestamp() * 1000)
-        })
-    return {"detail": "Task deleted successfully"}
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task with ID {task_id} not found"
+        )
+    
+    try:
+        # Получаем всех пользователей, которым назначена задача
+        user_ids = [user.user_id for user in task.users]
+        
+        # Удаляем задачу
+        db.delete(task)
+        db.commit()
+        
+        # Оповещаем студентов
+        for user_id in user_ids:
+            await notify_students_about_task({
+                "event": "delete_task",
+                "user_id": user_id,
+                "task_id": task_id,
+                "timestamp": int(datetime.now().timestamp() * 1000)
+            })
+        
+        return {"detail": f"Task {task_id} deleted successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting task: {str(e)}"
+        )
 
 @router.get("/tasks/status/{status}", response_model=List[Task], summary="Получить задачи по статусу")
 def get_tasks_by_status(status: TaskStatus, db: Session = Depends(get_db)):
@@ -155,31 +197,6 @@ def get_task_stats(db: Session = Depends(get_db)):
         "total_tasks": total_tasks,
         "tasks_by_status": dict(tasks_by_status)
     }
-
-@router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить задачу")
-async def update_task_status(task_id: int, task_update: TaskUpdate, db: Session = Depends(get_db)):
-    task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    update_data = task_update.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(task, key, value)
-    db.commit()
-    db.refresh(task)
-    # Получаем всех пользователей, которым назначена задача
-    user_ids = [user.user_id for user in task.users]
-    # Оповещаем студентов и преподавателей (assigners)
-    assigner_ids = [assigner.user_id for assigner in getattr(task, 'assigners', [])]
-    notify_ids = set(user_ids + assigner_ids)
-    for user_id in notify_ids:
-        await notify_students_about_task({
-            "event": "update_status",
-            "user_id": user_id,
-            "task_id": task_id,
-            "status": task.status.value if hasattr(task.status, 'value') else str(task.status),
-            "timestamp": int(datetime.now().timestamp() * 1000)
-        })
-    return task
 
 @router.post("/users_tasks", summary="Назначить задачу пользователю")
 async def assign_task_to_user(assignment: TaskAssignment, db: Session = Depends(get_db)):
@@ -249,6 +266,18 @@ def get_user_tasks(user_id: int, db: Session = Depends(get_db)):
     # Явно делаем запрос к задачам пользователя для получения актуальных статусов
     tasks = db.query(Tasks).join(Tasks.users).filter(Users.user_id == user_id).all()
     return tasks
+
+@router.get("/tasks/check/{task_id}", summary="Проверить существование задачи")
+def check_task_exists(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(Tasks).filter(Tasks.task_id == task_id).first()
+    if not task:
+        return {"exists": False, "detail": f"Task with ID {task_id} not found"}
+    return {
+        "exists": True,
+        "task_id": task.task_id,
+        "title": task.title,
+        "status": task.status.value if hasattr(task.status, 'value') else str(task.status)
+    }
 
 '''
 {
