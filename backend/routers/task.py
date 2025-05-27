@@ -1,8 +1,11 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
+from fastapi.responses import FileResponse
+import os
+import json
 
 from ..models import Tasks, Users, users_tasks_table
 from ..db import get_db
@@ -11,6 +14,9 @@ from sqlalchemy import Table, Column, Integer, String, DateTime, ForeignKey
 from .ws_notify import notify_students_about_task
 
 router = APIRouter()
+
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/tasks", response_model=TaskResponse, summary="Создать новую задачу")
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
@@ -29,6 +35,10 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     # Получаем ID исполнителя и назначившего
     user_id = task_data.pop("user_id")  # ID исполнителя (студента)
     assigner_id = task_data.pop("assigner_id", 1)  # ID назначившего (преподавателя)
+
+    # сериализация assigned_files
+    if "assigned_files" in task_data and task_data["assigned_files"] is not None:
+        task_data["assigned_files"] = json.dumps(task_data["assigned_files"])
 
     # Создаем задачу
     db_task = Tasks(**task_data)
@@ -53,8 +63,10 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_task)
 
+    # десериализация assigned_files для ответа
+    assigned_files = json.loads(db_task.assigned_files) if db_task.assigned_files else []
     response = TaskResponse(
-        **db_task.__dict__,
+        **{**db_task.__dict__, "assigned_files": assigned_files},
         user_ids=[user_id] if user_id is not None else [],  # Добавляем ID исполнителя в ответ, если он есть
         assigner_id=assigner_id
     )
@@ -65,14 +77,21 @@ def get_tasks(group_id: Optional[int] = None, db: Session = Depends(get_db)):
     query = db.query(Tasks)
     if group_id:
         query = query.filter(Tasks.group_id == group_id)
-    return query.all()
+    tasks = query.all()
+    # десериализация assigned_files для каждого задания
+    result = []
+    for t in tasks:
+        assigned_files = json.loads(t.assigned_files) if t.assigned_files else []
+        result.append(Task(**{**t.__dict__, "assigned_files": assigned_files}))
+    return result
 
 @router.get("/tasks/{task_id}", response_model=Task, summary="Получить задачу по ID")
 def get_task(task_id: int, db: Session = Depends(get_db)):
     task = db.get(Tasks, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    assigned_files = json.loads(task.assigned_files) if task.assigned_files else []
+    return Task(**{**task.__dict__, "assigned_files": assigned_files})
 
 @router.patch("/tasks/{task_id}", response_model=Task, summary="Обновить задачу")
 async def update_task(task_id: int, task_update: TaskUpdate, db: Session = Depends(get_db)):
@@ -263,9 +282,12 @@ def get_user_tasks(user_id: int, db: Session = Depends(get_db)):
     user = db.get(Users, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Явно делаем запрос к задачам пользователя для получения актуальных статусов
     tasks = db.query(Tasks).join(Tasks.users).filter(Users.user_id == user_id).all()
-    return tasks
+    result = []
+    for t in tasks:
+        assigned_files = json.loads(t.assigned_files) if t.assigned_files else []
+        result.append(Task(**{**t.__dict__, "assigned_files": assigned_files}))
+    return result
 
 @router.get("/tasks/check/{task_id}", summary="Проверить существование задачи")
 def check_task_exists(task_id: int, db: Session = Depends(get_db)):
@@ -278,6 +300,21 @@ def check_task_exists(task_id: int, db: Session = Depends(get_db)):
         "title": task.title,
         "status": task.status.value if hasattr(task.status, 'value') else str(task.status)
     }
+
+@router.post("/upload-file", summary="Загрузить файл для задачи")
+def upload_file(file: UploadFile = File(...)):
+    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    with open(file_location, "wb") as f:
+        f.write(file.file.read())
+    # Возвращаем путь, который будет сохраняться в assigned_files
+    return {"file_path": f"/uploads/{file.filename}"}
+
+@router.get("/uploads/{filename}", summary="Скачать файл задачи")
+def download_file(filename: str):
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=filename)
 
 '''
 {

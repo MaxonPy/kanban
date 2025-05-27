@@ -13,11 +13,13 @@ export interface Task {
   subject: string;
   description: string;
   assignedBy: string;
+  executorName?: string;
   priority: string;
   dueDate: string;
   status: 'assigned' | 'inProgress' | 'completed';
   group_id: number;
   group_name: string;
+  assigned_files?: string[];
 }
 
 export const Desktop = (): JSX.Element => {
@@ -45,6 +47,7 @@ export const Desktop = (): JSX.Element => {
         subject: task.title,
         description: task.description || '',
         assignedBy: users[task.assigner_id] || 'Неизвестно',
+        executorName: (task.user_ids && task.user_ids.length > 0) ? (users[task.user_ids[0]] || 'Неизвестно') : 'Не назначен',
         priority: task.priority || 'средний',
         dueDate: task.deadline ? new Date(task.deadline).toLocaleDateString() : 'Нет срока',
         status: typeof task.status === 'string' && task.status.toLowerCase() === 'todo'
@@ -53,7 +56,8 @@ export const Desktop = (): JSX.Element => {
             ? 'inProgress'
             : 'completed',
         group_id: task.group_id,
-        group_name: selectedGroup.name
+        group_name: selectedGroup.name,
+        assigned_files: Array.isArray(task.assigned_files) ? task.assigned_files : [],
       }));
       setTasks(mappedTasks);
     } catch (error) {
@@ -97,88 +101,13 @@ export const Desktop = (): JSX.Element => {
     }
   }, [userType, selectedGroup]);
 
+  // Быстрый polling для синхронизации задач
   useEffect(() => {
-    if (userType && currentUser) {
-      let ws: WebSocket | null = null;
-      let reconnectAttempts = 0;
-      const maxReconnectAttempts = 5;
-      const reconnectDelay = 3000; // 3 seconds
-
-      const connectWebSocket = () => {
-        try {
-          ws = new WebSocket('ws://localhost:8000/ws/tasks');
-          
-          ws.onopen = () => {
-            console.log('WebSocket connection established');
-            reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-          };
-
-          ws.onmessage = (event) => {
-            try {
-              const data = JSON.parse(event.data);
-              if (
-                ['new_task', 'delete_task', 'update_status'].includes(data.event) &&
-                data.user_id === currentUser.user_id
-              ) {
-                if (data.timestamp) {
-                  const now = Date.now();
-                  const delay = now - data.timestamp;
-                  console.log(`WS задержка (мс):`, delay);
-                }
-                // Если это обновление статуса, обновляем конкретную задачу
-                if (data.event === 'update_status') {
-                  setTasks(prevTasks => 
-                    prevTasks.map(task => 
-                      task.id === data.task_id 
-                        ? { 
-                            ...task, 
-                            status: data.status === 'todo' 
-                              ? 'assigned' 
-                              : data.status === 'in_progress' 
-                                ? 'inProgress' 
-                                : 'completed' 
-                          }
-                        : task
-                    )
-                  );
-                } else {
-                  // Для других событий обновляем все задачи
-                  fetchTasksRef.current();
-                }
-              }
-            } catch (error) {
-              console.error('Error parsing WebSocket message:', error);
-            }
-          };
-
-          ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-          };
-
-          ws.onclose = () => {
-            console.log('WebSocket connection closed');
-            if (reconnectAttempts < maxReconnectAttempts) {
-              reconnectAttempts++;
-              console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
-              setTimeout(connectWebSocket, reconnectDelay);
-            } else {
-              console.error('Max reconnection attempts reached');
-            }
-          };
-        } catch (error) {
-          console.error('Error creating WebSocket connection:', error);
-        }
-      };
-
-      connectWebSocket();
-
-      return () => {
-        if (ws) {
-          ws.close();
-        }
-      };
-    }
-  }, [userType, currentUser]);
+    const interval = setInterval(() => {
+      fetchTasks();
+    }, 1000); // 1 секунда
+    return () => clearInterval(interval);
+  }, [selectedGroup, userType, currentUser]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -271,6 +200,10 @@ export const Desktop = (): JSX.Element => {
     setSelectedGroup(group);
   };
 
+  const handleTaskCreated = () => {
+    fetchTasks();
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-[#f5f5dc]">
       <HeaderByAnima 
@@ -324,7 +257,7 @@ export const Desktop = (): JSX.Element => {
       <TaskDialog 
         open={isTaskDialogOpen} 
         onOpenChange={setIsTaskDialogOpen} 
-        onTaskCreated={fetchTasks}
+        onTaskCreated={handleTaskCreated}
         selectedGroup={selectedGroup}
       />
     </div>

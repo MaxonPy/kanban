@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Dict
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from enum import Enum
 
 class TaskStatus(str, Enum):
@@ -17,10 +17,20 @@ class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
     deadline: Optional[datetime] = None
-    assigned_files: Optional[int] = None
+    assigned_files: Optional[List[str]] = None
     group_id: Optional[int] = None
     board_id: Optional[int] = None
     assigner_id: Optional[int] = 1  # ID пользователя, который назначил задачу (по умолчанию 1)
+    
+    @field_validator('assigned_files', mode='before')
+    @classmethod
+    def parse_assigned_files(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
 
 class TaskCreate(TaskBase):
     user_id: Optional[int] = None  # ID исполнителя задачи (студента)

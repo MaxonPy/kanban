@@ -50,9 +50,34 @@ export const DraggableTask = ({ task, activeId, onDelete, shadow }: Props): JSX.
           <div className="text-sm text-gray-700 break-words whitespace-pre-line">{task.description}</div>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-gray-400">Назначено: <span className="text-gray-700 font-medium">{task.assignedBy}</span></span>
+          <span className="text-xs text-gray-400">
+            {userType === 'teacher'
+              ? <>Выполняет: <span className="text-gray-700 font-medium">{task.executorName}</span></>
+              : <>Назначено: <span className="text-gray-700 font-medium">{task.assignedBy}</span></>
+            }
+          </span>
           <span className="text-xs text-gray-400">Приоритет: <span className="text-gray-700 font-medium">{task.priority}</span></span>
         </div>
+        {Array.isArray(task.assigned_files) && task.assigned_files.length > 0 && (
+          <div className="mt-1">
+            <span className="text-xs text-[#2563eb] font-semibold">Файлы:</span>
+            <ul className="list-disc ml-4">
+              {task.assigned_files.map((fileUrl, idx) => (
+                <li key={idx}>
+                  <a
+                    href={`http://localhost:8000${fileUrl}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 underline text-xs"
+                    download
+                  >
+                    {decodeURIComponent(fileUrl.split('/').pop() || 'Файл')}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="absolute right-2 top-2 flex items-center gap-1.5 z-10">
           {userType === 'teacher' && (
             <Button
